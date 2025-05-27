@@ -133,7 +133,21 @@ function s:connections.save(name, url) abort
     call db_ui#notifications#error('Connection with that name already exists. Please enter different name.')
     return 0
   endif
-  call add(file, {'name': a:name, 'url': a:url})
+
+  let new_connection = {'name': a:name, 'url': a:url}
+
+  if matchstr(a:url, 'mysql://') !=# ''
+    let path = matchstr(a:url, 'mysql://\zs[^?]*')
+    if path ==# '' || path ==# '/'
+      let new_connection.is_server_connection = v:true
+    else
+      let new_connection.is_server_connection = v:false
+    endif
+  else
+    let new_connection.is_server_connection = v:false
+  endif
+
+  call add(file, new_connection)
   return self.write(file)
 endfunction
 

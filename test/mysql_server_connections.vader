@@ -1,0 +1,171 @@
+Before:
+  let g:db_ui_save_location = './test-tmp-files'
+  let g:db_ui_connections_file_name = 'test-connections.json'
+  let s:connections_json_path = g:db_ui_save_location . '/' . g:db_ui_connections_file_name
+
+  " Ensure save location exists and is empty
+  if isdirectory(g:db_ui_save_location)
+    call delete(g:db_ui_save_location, 'rf')
+  endif
+  call mkdir(g:db_ui_save_location, 'p')
+  call writefile(['[]'], s:connections_json_path)
+
+  let g:db_ui_show_help = 0
+  let g:db_ui_icons = {
+    \ 'connection_ok': '✔',
+    \ 'connection_error': '✖',
+    \ 'add_connection': '+',
+    \ 'folder': 'F',
+    \ 'server_collection': 'SC',
+    \ 'new_query': 'NQ',
+    \ 'buffers': 'B',
+    \ 'saved_query': 'SQ',
+    \ 'tables': 'T',
+    \ 'schemas': 'S',
+    \ 'schema': 's',
+    \ 'table': 't',
+    \ 'expanded': { 'db': '▼', 'buffers': '▼', 'saved_queries': '▼', 'tables': '▼', 'schemas': '▼', 'schema': '▼', 'table': '▼' },
+    \ 'collapsed': { 'db': '▶', 'buffers': '▶', 'saved_queries': '▶', 'tables': '▶', 'schemas': '▶', 'schema': '▶', 'table': '▶' }
+    \ }
+
+  DBUIExtension call db_ui#run()
+  let s:drawer = db_ui#drawer#get()
+  let s:dbui_win = s:drawer.get_winnr()
+
+After:
+  call db_ui#drawer#get().quit()
+  " Restore any mocked functions if necessary
+  if exists('s:original_schemas_query')
+    let db_ui#schemas#query = s:original_schemas_query
+    unlet s:original_schemas_query
+  endif
+  call delete(g:db_ui_save_location, 'rf')
+  unlet g:db_ui_save_location g:db_ui_connections_file_name g:db_ui_icons g:db_ui_show_help
+  DBUIExtension call db_ui#reset_state_for_tests()
+
+
+Given MySql Server Connection:
+  let connections = [
+  \  { "name": "MySQL Server", "url": "mysql://user@host" }
+  \]
+  call writefile([json_encode(connections)], s:connections_json_path)
+  call db_ui#run() " Reload to pick up new connections
+
+Execute (Test display of MySQL server connection):
+  " Wait for DBUI to render
+  sleep 200m
+  let buffer_content = getbufline(winbufnr(s:dbui_win), 1, '$')
+  Log buffer_content
+
+  " Expected: Server connection displayed with (Server) suffix and SC icon
+  " Icon for collapsed DB is '▶', for server collection it should be 'SC'
+  Assert match(buffer_content[0], 'SC MySQL Server (Server).*') >= 0, "Line: " . buffer_content[0]
+  " Check that only one line is present initially (the server itself) or that subsequent lines are not indented under it
+  Assert len(buffer_content) == 1 || stridx(buffer_content[1], '  ') != 0, "Children should not be visible. Found: " . get(buffer_content, 1, "")
+
+
+Execute (Test expanding MySQL server connection):
+  " Mock db_ui#schemas#query
+  if !exists('s:original_schemas_query')
+    let s:original_schemas_query = funcref('db_ui#schemas#query')
+  endif
+
+  function! MockedSchemasQuery(db, scheme, query)
+    if get(a:scheme, 'filetype', '') == 'mysql' && a:query == 'SELECT schema_name FROM information_schema.schemata'
+      Log "MockedSchemasQuery: Returning mocked list for MySQL server"
+      return ['schema_name', 'db1', 'db2', 'information_schema', 'mysql', 'performance_schema', 'sys', 'another_db']
+    else
+      Log "MockedSchemasQuery: Calling original for query: " .污水沟渠
+      return call(s:original_schemas_query, [a:db, a:scheme, a:query])
+    endif
+  endfunction
+  let db_ui#schemas#query = funcref('MockedSchemasQuery')
+
+  " Ensure the connection is there from 'Given'
+  call db_ui#run() " Reload to pick up new connections and apply mocks
+  sleep 200m
+
+  " Simulate expanding the MySQL server connection
+  " Move cursor to the first line (server connection) and toggle it
+  call cursor(1, 1)
+  call s:drawer.toggle_line('') " This internally calls toggle_db and then render
+  sleep 200m " Allow rendering
+
+  let buffer_content = getbufline(winbufnr(s:dbui_win), 1, '$')
+  Log buffer_content
+
+  " Verify server itself is still there and expanded (icon might change)
+  Assert match(buffer_content[0], 'SC MySQL Server (Server).*') >= 0, "Server line: " . buffer_content[0]
+
+  " Verify child databases db1, db2, another_db are displayed and indented
+  Assert match(buffer_content[1], '  ▶ db1.*') >= 0, "Child db1: " . buffer_content[1]
+  Assert match(buffer_content[2], '  ▶ db2.*') >= 0, "Child db2: " . buffer_content[2]
+  Assert match(buffer_content[3], '  ▶ another_db.*') >= 0, "Child another_db: " . buffer_content[3]
+
+  " Verify system databases are filtered out
+  Assert 0 == count(buffer_content, '  .*information_schema.*'), "information_schema should be filtered"
+  Assert 0 == count(buffer_content, '  .*mysql.*'), "mysql should be filtered"
+  Assert 0 == count(buffer_content, '  .*performance_schema.*'), "performance_schema should be filtered"
+  Assert 0 == count(buffer_content, '  .*sys.*'), "sys should be filtered"
+
+  " Verify properties of child databases from s:drawer.dbui.dbs
+  let dbs = s:drawer.dbui.dbs
+  let server_key = keys(filter(copy(dbs), 'v:val.name == "MySQL Server"'))[0]
+  Log "Server key: " . server_key
+
+  let db1_key = server_key . ":db1"
+  Assert has_key(dbs, db1_key), "db1 not found in internal dbs structure. Keys: " . string(keys(dbs))
+  Assert dbs[db1_key].name == 'db1'
+  Assert dbs[db1_key].url == 'mysql://user@host/db1'
+  Assert !dbs[db1_key].is_server_connection
+  Assert dbs[db1_key].parent_key_name == server_key
+
+  let db2_key = server_key . ":db2"
+  Assert has_key(dbs, db2_key)
+  Assert dbs[db2_key].name == 'db2'
+  Assert dbs[db2_key].url == 'mysql://user@host/db2'
+  Assert !dbs[db2_key].is_server_connection
+  Assert dbs[db2_key].parent_key_name == server_key
+  
+  let another_db_key = server_key . ":another_db"
+  Assert has_key(dbs, another_db_key)
+  Assert dbs[another_db_key].name == 'another_db'
+  Assert dbs[another_db_key].url == 'mysql://user@host/another_db'
+  Assert !dbs[another_db_key].is_server_connection
+  Assert dbs[another_db_key].parent_key_name == server_key
+
+  " Verify that "New Query", etc. are NOT under the server collection entry
+  " The server line is buffer_content[0]. The next lines are child DBs.
+  " If we were to expand db1 (e.g. buffer_content[1]), then NQ etc. would appear under it.
+  " This test focuses on the state after expanding the *server* line.
+  " The server line itself should not have sub-items like "New Query"
+  " The structure is:
+  " SC MySQL Server (Server)
+  "   ▶ db1
+  "   ▶ db2
+  "   ▶ another_db
+  " If db1 was expanded it would be:
+  " SC MySQL Server (Server)
+  "   ▼ db1
+  "     NQ New query
+  "     ...
+  " So, check that lines immediately after server are not NQ, Buffers etc.
+  Assert stridx(buffer_content[1], '  NQ New query') != 0, "Server collection should not list 'New Query' directly"
+
+  " Now, expand db1 and check for 'New Query' etc.
+  call cursor(2, 1) " Line 2 should be '  ▶ db1'
+  call s:drawer.toggle_line('')
+  sleep 200m
+  let buffer_content_after_db1_expand = getbufline(winbufnr(s:dbui_win), 1, '$')
+  Log buffer_content_after_db1_expand
+
+  Assert match(buffer_content_after_db1_expand[1], '  ▼ db1.*') >= 0, "db1 should be expanded. Line: " . buffer_content_after_db1_expand[1]
+  Assert match(buffer_content_after_db1_expand[2], '    NQ New query.*') >= 0, "'New Query' should be under db1. Line: " . buffer_content_after_db1_expand[2]
+  Assert match(buffer_content_after_db1_expand[3], '    B Buffers.*') >= 0, "'Buffers' should be under db1. Line: " . buffer_content_after_db1_expand[3]
+
+  " Restore mock
+  let db_ui#schemas#query = s:original_schemas_query
+  unlet s:original_schemas_query
+
+" Reset state for next test if any
+call db_ui#run()

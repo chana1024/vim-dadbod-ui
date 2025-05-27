@@ -408,54 +408,68 @@ endfunction
 
 function! s:drawer.add_db(db) abort
   let db_name = a:db.name
-  if !empty(a:db.conn_error)
-    let db_name .= ' '.g:db_ui_icons.connection_error
-  elseif !empty(a:db.conn)
-    let db_name .= ' '.g:db_ui_icons.connection_ok
+  let db_icon = self.get_toggle_icon('db', a:db)
+  let level = get(a:db, 'parent_key_name', 0) != 0 ? 1 : 0 " Child DBs are level 1, others level 0
+
+  if get(a:db, 'is_server_connection', v:false)
+    let db_name .= ' (Server)'
+    let db_icon = get(g:db_ui_icons, 'server_collection', g:db_ui_icons.folder) " Use server_collection or fallback to folder
+  else
+    if !empty(a:db.conn_error)
+      let db_name .= ' '.g:db_ui_icons.connection_error
+    elseif !empty(a:db.conn)
+      let db_name .= ' '.g:db_ui_icons.connection_ok
+    endif
   endif
+
   if self.show_details
     let db_name .= ' ('.a:db.scheme.' - '.a:db.source.')'
   endif
-  call self.add(db_name, 'toggle', 'db', self.get_toggle_icon('db', a:db), a:db.key_name, 0, { 'expanded': a:db.expanded })
+  call self.add(db_name, 'toggle', 'db', db_icon, a:db.key_name, level, { 'expanded': a:db.expanded })
   if !a:db.expanded
     return a:db
   endif
 
-  call self.add('New query', 'open', 'query', g:db_ui_icons.new_query, a:db.key_name, 1)
+  " Do not show children like "New Query" for the server collection itself
+  if get(a:db, 'is_server_connection', v:false)
+    return a:db
+  endif
+
+  call self.add('New query', 'open', 'query', g:db_ui_icons.new_query, a:db.key_name, level + 1)
   if !empty(a:db.buffers.list)
-    call self.add('Buffers ('.len(a:db.buffers.list).')', 'toggle', 'buffers', self.get_toggle_icon('buffers', a:db.buffers), a:db.key_name, 1, { 'expanded': a:db.buffers.expanded })
+    call self.add('Buffers ('.len(a:db.buffers.list).')', 'toggle', 'buffers', self.get_toggle_icon('buffers', a:db.buffers), a:db.key_name, level + 1, { 'expanded': a:db.buffers.expanded })
     if a:db.buffers.expanded
       for buf in a:db.buffers.list
         let buflabel = self.get_buffer_name(a:db, buf)
         if self.dbui.is_tmp_location_buffer(a:db, buf)
           let buflabel .= ' *'
         endif
-        call self.add(buflabel, 'open', 'buffer', g:db_ui_icons.buffers, a:db.key_name, 2, { 'file_path': buf })
+        call self.add(buflabel, 'open', 'buffer', g:db_ui_icons.buffers, a:db.key_name, level + 2, { 'file_path': buf })
       endfor
     endif
   endif
-  call self.add('Saved queries ('.len(a:db.saved_queries.list).')', 'toggle', 'saved_queries', self.get_toggle_icon('saved_queries', a:db.saved_queries), a:db.key_name, 1, { 'expanded': a:db.saved_queries.expanded })
+  call self.add('Saved queries ('.len(a:db.saved_queries.list).')', 'toggle', 'saved_queries', self.get_toggle_icon('saved_queries', a:db.saved_queries), a:db.key_name, level + 1, { 'expanded': a:db.saved_queries.expanded })
   if a:db.saved_queries.expanded
     for saved_query in a:db.saved_queries.list
-      call self.add(fnamemodify(saved_query, ':t'), 'open', 'buffer', g:db_ui_icons.saved_query, a:db.key_name, 2, { 'file_path': saved_query, 'saved': 1 })
+      call self.add(fnamemodify(saved_query, ':t'), 'open', 'buffer', g:db_ui_icons.saved_query, a:db.key_name, level + 2, { 'file_path': saved_query, 'saved': 1 })
     endfor
   endif
 
-  if a:db.schema_support
-    call self.add('Schemas ('.len(a:db.schemas.items).')', 'toggle', 'schemas', self.get_toggle_icon('schemas', a:db.schemas), a:db.key_name, 1, { 'expanded': a:db.schemas.expanded })
+  if get(a:db, 'schema_support', v:false)
+    call self.add('Schemas ('.len(a:db.schemas.items).')', 'toggle', 'schemas', self.get_toggle_icon('schemas', a:db.schemas), a:db.key_name, level + 1, { 'expanded': a:db.schemas.expanded })
     if a:db.schemas.expanded
       for schema in a:db.schemas.list
         let schema_item = a:db.schemas.items[schema]
         let tables = schema_item.tables
-        call self.add(schema.' ('.len(tables.items).')', 'toggle', 'schemas->items->'.schema, self.get_toggle_icon('schema', schema_item), a:db.key_name, 2, { 'expanded': schema_item.expanded })
+        call self.add(schema.' ('.len(tables.items).')', 'toggle', 'schemas->items->'.schema, self.get_toggle_icon('schema', schema_item), a:db.key_name, level + 2, { 'expanded': schema_item.expanded })
         if schema_item.expanded
-          call self.render_tables(tables, a:db,'schemas->items->'.schema.'->tables->items', 3, schema)
+          call self.render_tables(tables, a:db,'schemas->items->'.schema.'->tables->items', level + 3, schema)
         endif
       endfor
     endif
   else
-    call self.add('Tables ('.len(a:db.tables.items).')', 'toggle', 'tables', self.get_toggle_icon('tables', a:db.tables), a:db.key_name, 1, { 'expanded': a:db.tables.expanded })
-    call self.render_tables(a:db.tables, a:db, 'tables->items', 2, '')
+    call self.add('Tables ('.len(a:db.tables.items).')', 'toggle', 'tables', self.get_toggle_icon('tables', a:db.tables), a:db.key_name, level + 1, { 'expanded': a:db.tables.expanded })
+    call self.render_tables(a:db.tables, a:db, 'tables->items', level + 2, '')
   endif
 endfunction
 
@@ -581,7 +595,94 @@ function! s:drawer.toggle_db(db) abort
   call self.dbui.connect(a:db)
 
   if !empty(a:db.conn)
-    call self.populate(a:db)
+    if get(a:db, 'is_server_connection', v:false) && get(a:db, 'expanded', v:false) && !get(a:db, 'child_databases_loaded', v:false)
+      let mysql_scheme_config = db_ui#schemas#get('mysql')
+      let query_string = 'SELECT schema_name FROM information_schema.schemata'
+      let raw_results = db_ui#schemas#query(a:db, mysql_scheme_config, query_string)
+
+      let db_names = []
+      if type(raw_results) == v:t_list && len(raw_results) > 1
+        " Apply parsing similar to mysql_scheme_config.parse_results: skip header, trim, filter empty
+        for i in range(1, len(raw_results) - 1)
+          let line_content = trim(raw_results[i])
+          if !empty(line_content)
+            call add(db_names, split(line_content, '\t')[0])
+          endif
+        endfor
+      endif
+
+      let parent_idx = -1
+      for i in range(len(self.dbui.dbs_list))
+        if self.dbui.dbs_list[i].key_name ==? a:db.key_name
+          let parent_idx = i
+          break
+        endif
+      endfor
+
+      if parent_idx != -1
+        let child_db_list_entries = []
+        for db_name in db_names
+          if db_name ==? 'information_schema' || db_name ==? 'mysql' || db_name ==? 'performance_schema' || db_name ==? 'sys'
+            continue
+          endif
+
+          let base_url = substitute(a:db.url, '\v/?$', '', '') " Ensure no trailing slash
+          let new_url = base_url . '/' . db_name
+          let new_key_name = printf('%s:%s', a:db.key_name, db_name)
+
+          if has_key(self.dbui.dbs, new_key_name)
+            " Potentially, find existing and add to child_db_list_entries if not already there
+            " For now, assume if it's in self.dbui.dbs, it might be in dbs_list already or will be handled by a refresh
+            " To be safe, let's check if it's in dbs_list before adding
+            let found_in_list = v:false
+            for entry_idx in range(parent_idx + 1, len(self.dbui.dbs_list) - 1)
+                if self.dbui.dbs_list[entry_idx].key_name == new_key_name
+                    let found_in_list = v:true
+                    break
+                endif
+                if !get(self.dbui.dbs[self.dbui.dbs_list[entry_idx].key_name], 'parent_key_name', '') == a:db.key_name
+                    break " Stop if we are past children of current parent
+                endif
+            endfor
+            if found_in_list
+                continue
+            endif
+            " If not in list, but in dbs, it's an orphaned entry. We can re-add it.
+          endif
+
+          let new_db_object = {
+                \ 'name': db_name,
+                \ 'url': new_url,
+                \ 'is_server_connection': v:false,
+                \ 'key_name': new_key_name,
+                \ 'expanded': v:false,
+                \ 'source': a:db.source,
+                \ 'scheme': a:db.scheme,
+                \ 'conn_tried': v:false,
+                \ 'conn_error': '',
+                \ 'conn': {},
+                \ 'tables': {'expanded': v:false, 'list': [], 'items': {}},
+                \ 'schemas': {'expanded': v:false, 'list': [], 'items': {}},
+                \ 'buffers': {'expanded': v:false, 'list': [], 'tmp': []},
+                \ 'saved_queries': {'expanded': v:false, 'list': []},
+                \ 'schema_support': get(a:db, 'schema_support', v:true),
+                \ 'table_helpers': get(a:db, 'table_helpers', {}),
+                \ 'save_path': get(a:db, 'save_path', ''),
+                \ 'parent_key_name': a:db.key_name
+                \ }
+          let self.dbui.dbs[new_key_name] = new_db_object
+          call add(child_db_list_entries, { 'key_name': new_key_name, 'name': db_name })
+        endfor
+
+        " Insert new DBs into dbs_list in reverse to maintain order
+        for i in range(len(child_db_list_entries) - 1, -1, -1)
+          call insert(self.dbui.dbs_list, child_db_list_entries[i], parent_idx + 1)
+        endfor
+        let a:db.child_databases_loaded = v:true
+      endif
+    elseif !get(a:db, 'is_server_connection', v:false) " Only populate non-server connections here
+      call self.populate(a:db)
+    endif
   endif
 endfunction
 
